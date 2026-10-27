@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "AI Meeting Assistant",
+  "version": "1.0",
+  "description": "AI-powered assistant for meeting transcripts and notes",
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "src/background.js"
+  },
+  "permissions": [
+    "activeTab",
+    "tabs",
+    "scripting",
+    "tabCapture",
+    "offscreen"
+  ]
+}
