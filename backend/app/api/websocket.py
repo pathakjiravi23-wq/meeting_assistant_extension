@@ -1,15 +1,14 @@
 import asyncio
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from gnani.stt import StreamTranscriptEvent  # pyright: ignore[reportMissingImports]
 
 from app.services.ffmpeg_stream import FFmpegAudioStream
-from app.services.gnani_stt import GnaniSTTService
+from app.services.deepgram_stt import DeepgramSTTService  # ← changed
 
 router = APIRouter()
 
 FRAME_BYTES = 1024
-FRAME_DELAY = 0.032  # 1024 bytes = 32 ms at 16 kHz, 16-bit mono
+FRAME_DELAY = 0.032
 SILENCE_FRAME = b"\x00" * FRAME_BYTES
 
 
@@ -18,7 +17,7 @@ async def audio_stream(websocket: WebSocket):
     await websocket.accept()
 
     decoder = FFmpegAudioStream()
-    stt = GnaniSTTService()
+    stt = DeepgramSTTService()  # ← changed
     frame_queue: asyncio.Queue[bytes] = asyncio.Queue()
     stop_sending = asyncio.Event()
     seen_segments: set[str] = set()
@@ -30,21 +29,50 @@ async def audio_stream(websocket: WebSocket):
     await decoder.start()
 
     async def forward_transcripts():
-        assert stt.client is not None
+        for _ in range(10):
+            if stt.client is not None:
+                break
+            await asyncio.sleep(0.1)
+
+        if stt.client is None:
+            print("forward_transcripts: no client, skipping")
+            return
+
         try:
-            async for event in stt.client.events():
-                if not isinstance(event, StreamTranscriptEvent):
+            async for event in stt.events():
+                if not event:
                     continue
-                text = event.text.strip()
-                if not text or event.segment_id in seen_segments:
+
+                # ← new: notify frontend if connection dropped
+                if event.get("type") == "connection_closed":
+                    await websocket.send_json(
+                        {
+                            "type": "error",
+                            "message": "Transcription service disconnected. Stop and restart recording.",
+                        }
+                    )
+                    return
+
+                segment_id = event.get("segment_id", "")
+                text = event.get("text", "").strip()
+
+                if not text or segment_id in seen_segments:
                     continue
-                seen_segments.add(event.segment_id)
-                await websocket.send_json({
-                    "type": "transcript",
-                    "segment_id": event.segment_id,
-                    "text": text,
-                    "final": True,
-                })
+
+                seen_segments.add(segment_id)
+                speaker = event.get("speaker", 0)
+
+                print(f"[Speaker {speaker}] {text}")
+
+                await websocket.send_json(
+                    {
+                        "type": "transcript",
+                        "segment_id": segment_id,
+                        "text": text,
+                        "speaker": speaker,
+                        "final": True,
+                    }
+                )
         except Exception as error:
             print("Transcript forwarding stopped:", error)
 
@@ -64,7 +92,7 @@ async def audio_stream(websocket: WebSocket):
             try:
                 frame = await asyncio.wait_for(frame_queue.get(), timeout=FRAME_DELAY)
             except asyncio.TimeoutError:
-                frame = SILENCE_FRAME  # keep Gnani's stream continuous
+                frame = SILENCE_FRAME
 
             now = loop.time()
             if next_send > now:
@@ -74,8 +102,20 @@ async def audio_stream(websocket: WebSocket):
                 await stt.send_audio(frame)
                 frames_sent += 1
             except Exception as error:
-                print("Gnani send failed:", type(error).__name__, error)
-                return
+                print("Deepgram send failed:", type(error).__name__, error)
+                print("Attempting Deepgram reconnect...")
+                try:
+                    await stt.close()
+                except Exception:
+                    pass
+                try:
+                    await stt.connect()
+                    print("Deepgram reconnected successfully")
+                    asyncio.create_task(forward_transcripts())
+                    await stt.send_audio(frame)
+                except Exception as reconnect_error:
+                    print("Reconnect failed:", reconnect_error)
+                    return
 
             next_send = max(next_send, now) + FRAME_DELAY
 
@@ -104,7 +144,7 @@ async def audio_stream(websocket: WebSocket):
         await reader_task
         stop_sending.set()
         await sender_task
-        print(f"Frames sent to Gnani: {frames_sent}")
+        print(f"Frames sent to Deepgram: {frames_sent}")
 
         transcript = await stt.close()
         await transcript_task
@@ -114,4 +154,4 @@ async def audio_stream(websocket: WebSocket):
         try:
             await websocket.send_json({"type": "final", "transcript": transcript})
         except Exception:
-            pass  # socket already closed
+            pass

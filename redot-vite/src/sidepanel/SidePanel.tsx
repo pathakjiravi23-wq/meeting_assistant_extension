@@ -17,6 +17,7 @@ export default function SidePanel() {
     const [showNewPage, setShowNewPage] = useState(false)
     const [savedTitle, setSavedTitle] = useState<string | null>(null)
     const [sidebarOpen, setSidebarOpen] = useState(true)
+    const [transcriptError, setTranscriptError] = useState<string | null>(null) // ← new
 
     const prevStatus = useRef<string | null>(null)
 
@@ -26,16 +27,26 @@ export default function SidePanel() {
         return () => unwatch()
     }, [])
 
+    // ← new: watch transcriptError from storage
+    useEffect(() => {
+        extStorage.get<string>("transcriptError").then((e) => setTranscriptError(e ?? null))
+        const unwatch = extStorage.watch({
+            transcriptError: (c) => setTranscriptError(c.newValue ?? null),
+        })
+        return () => unwatch()
+    }, [])
+
     useEffect(() => {
         if (status === "recording" && prevStatus.current !== "recording") {
             useMeetingStore.getState().reset()
             setSavedTitle(null)
             setShowNewPage(false)
+            setTranscriptError(null) // ← clear error on new recording
+            chrome.storage.local.remove("transcriptError")
         }
         prevStatus.current = status
     }, [status])
 
-    // Transcript sync: read stored transcripts and listen for changes.
     useEffect(() => {
         const sync = (list: any[] = []) => {
             const store = useMeetingStore.getState()
@@ -52,7 +63,7 @@ export default function SidePanel() {
             }
         }
 
-        chrome.storage.local.get("transcripts", (r) => sync(r.transcripts ?? []))
+        chrome.storage.local.get("transcripts", (r: Record<string, any>) => sync(r.transcripts ?? []))
         const listener = (changes: any, area: string) => {
             if (area === "local" && changes.transcripts) sync(changes.transcripts.newValue ?? [])
         }
@@ -95,7 +106,14 @@ export default function SidePanel() {
         : nav === "meetings" ? "Meetings" : nav === "plugins" ? "Plugins" : "Updates"
 
     const renderMain = () => {
-        if (isLive || isSaving) return <LiveView segments={segments} saving={isSaving} onStop={onStop} />
+        if (isLive || isSaving) return (
+            <LiveView
+                segments={segments}
+                saving={isSaving}
+                onStop={onStop}
+                transcriptError={transcriptError} // ← pass down
+            />
+        )
         if (isSaved && savedTitle) return <SavedView title={savedTitle} onTitleChange={setSavedTitle} onNew={openNew} />
         if (selectedMeetingId && !showNewPage) return <MeetingDetail meetingId={selectedMeetingId} />
         return <StartView onStart={() => send("START")} />

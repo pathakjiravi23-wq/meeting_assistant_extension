@@ -10,6 +10,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         appendTranscript(message.payload)
         return false
     }
+    // ← new: store transcript errors
+    if (message.target === "background" && message.action === "TRANSCRIPT_ERROR") {
+        set("transcriptError", message.payload.message)
+        return false
+    }
     if (message.target === "offscreen") return false
 
     if (message.action === "START") {
@@ -41,6 +46,7 @@ async function startRecording() {
         return { ok: true }
     }
     await chrome.storage.local.remove("error")
+    await chrome.storage.local.remove("transcriptError") // ← clear old errors on new recording
     await set("status", "starting")
     await chrome.storage.local.remove("transcripts")
     try {

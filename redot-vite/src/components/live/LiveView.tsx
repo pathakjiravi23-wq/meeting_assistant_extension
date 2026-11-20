@@ -9,21 +9,30 @@ type Props = {
     segments: Segment[]
     saving: boolean
     onStop: () => void
+    transcriptError?: string | null // ← new
 }
 
-export function LiveView({ segments, saving, onStop }: Props) {
+export function LiveView({ segments, saving, onStop, transcriptError }: Props) {
     return (
         <div className="flex h-full w-full flex-col gap-4">
             <Card className="flex flex-1 flex-col overflow-hidden">
                 <CardHeader className="flex-row items-center justify-between">
                     <div>
                         <CardTitle>Live transcript</CardTitle>
-                        <CardDescription>{saving ? "Saving transcript…" : "Streaming while the meeting runs"}</CardDescription>
+                        <CardDescription>
+                            {saving ? "Saving transcript…" : "Streaming while the meeting runs"}
+                        </CardDescription>
                     </div>
                     {!saving && <Badge tone="live" dot>Recording</Badge>}
                 </CardHeader>
                 <CardContent className="flex-1 space-y-3 overflow-y-auto">
-                    {segments.length === 0 && (
+                    {/* ← error banner */}
+                    {transcriptError && (
+                        <div className="rounded-md border border-red-200 bg-red-50 px-3.5 py-2.5 text-sm text-red-700">
+                            ⚠ {transcriptError}
+                        </div>
+                    )}
+                    {segments.length === 0 && !transcriptError && (
                         <p className="py-10 text-center text-sm text-stone-400">Listening for speech…</p>
                     )}
                     {segments.map((s) => (
@@ -35,7 +44,11 @@ export function LiveView({ segments, saving, onStop }: Props) {
             </Card>
 
             <div className="flex items-center justify-between gap-4">
-                <p className="text-xs text-stone-400">Let participants know this meeting is being transcribed.</p>
+                <p className="text-xs text-stone-400">
+                    {transcriptError
+                        ? "Stop and restart recording to reconnect."
+                        : "Let participants know this meeting is being transcribed."}
+                </p>
                 {saving ? (
                     <Button variant="outline" disabled>
                         <Loader2 size={15} className="animate-spin" /> Saving

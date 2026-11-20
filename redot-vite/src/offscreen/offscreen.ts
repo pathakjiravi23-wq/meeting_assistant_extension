@@ -38,6 +38,10 @@ async function startCapture(streamId: string) {
         if (data.type === "transcript" || data.type === "final") {
             chrome.runtime.sendMessage({ target: "background", action: "TRANSCRIPT", payload: data })
         }
+        // ← new: propagate error to frontend
+        if (data.type === "error") {
+            chrome.runtime.sendMessage({ target: "background", action: "TRANSCRIPT_ERROR", payload: data })
+        }
     }
 
     try {
