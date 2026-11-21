@@ -1,9 +1,13 @@
 import asyncio
+import uuid
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.services.ffmpeg_stream import FFmpegAudioStream
-from app.services.deepgram_stt import DeepgramSTTService  # ← changed
+from app.services.deepgram_stt import DeepgramSTTService
+from app.db.session import AsyncSessionLocal
+from app.db.models import Meeting, Segment, Speaker
 
 router = APIRouter()
 
@@ -17,13 +21,26 @@ async def audio_stream(websocket: WebSocket):
     await websocket.accept()
 
     decoder = FFmpegAudioStream()
-    stt = DeepgramSTTService()  # ← changed
+    stt = DeepgramSTTService()
     frame_queue: asyncio.Queue[bytes] = asyncio.Queue()
     stop_sending = asyncio.Event()
     seen_segments: set[str] = set()
+    seen_speakers: set[int] = set()
     frames_sent = 0
     chunks_received = 0
     bytes_received = 0
+
+    # Create meeting record when recording starts
+    meeting_id = uuid.uuid4()
+    async with AsyncSessionLocal() as db:
+        meeting = Meeting(
+            id=meeting_id,
+            started_at=datetime.now(timezone.utc),
+            status="recording",
+        )
+        db.add(meeting)
+        await db.commit()
+        print(f"Meeting created: {meeting_id}")
 
     await stt.connect()
     await decoder.start()
@@ -43,7 +60,6 @@ async def audio_stream(websocket: WebSocket):
                 if not event:
                     continue
 
-                # ← new: notify frontend if connection dropped
                 if event.get("type") == "connection_closed":
                     await websocket.send_json(
                         {
@@ -64,6 +80,31 @@ async def audio_stream(websocket: WebSocket):
 
                 print(f"[Speaker {speaker}] {text}")
 
+                # Save speaker if first time seen
+                if speaker not in seen_speakers:
+                    seen_speakers.add(speaker)
+                    async with AsyncSessionLocal() as db:
+                        db.add(
+                            Speaker(
+                                meeting_id=meeting_id,
+                                speaker_index=speaker,
+                            )
+                        )
+                        await db.commit()
+
+                # Save segment to DB
+                async with AsyncSessionLocal() as db:
+                    db.add(
+                        Segment(
+                            meeting_id=meeting_id,
+                            speaker_index=speaker,
+                            text=text,
+                            start_time=float(segment_id),
+                        )
+                    )
+                    await db.commit()
+
+                # Send to frontend
                 await websocket.send_json(
                     {
                         "type": "transcript",
@@ -73,6 +114,7 @@ async def audio_stream(websocket: WebSocket):
                         "final": True,
                     }
                 )
+
         except Exception as error:
             print("Transcript forwarding stopped:", error)
 
@@ -148,6 +190,18 @@ async def audio_stream(websocket: WebSocket):
 
         transcript = await stt.close()
         await transcript_task
+
+        # Update meeting as completed
+        async with AsyncSessionLocal() as db:
+            meeting_obj = await db.get(Meeting, meeting_id)
+            if meeting_obj:
+                meeting_obj.ended_at = datetime.now(timezone.utc)
+                meeting_obj.status = "completed"
+                meeting_obj.title = (
+                    f"Meeting · {datetime.now(timezone.utc).strftime('%d %B %y')}"
+                )
+                await db.commit()
+                print(f"Meeting {meeting_id} completed")
 
         print("Final transcript:", transcript)
 
