@@ -34,37 +34,29 @@ class DeepgramSTTService:
         self._transcripts = []
         self._event_queue = asyncio.Queue()
 
-        # v7.19: set env var first, then init with no args
         os.environ["DEEPGRAM_API_KEY"] = self.api_key
         self._dg_client = AsyncDeepgramClient()
 
-        # v7.19: listen.v1.connect() is an async context manager
         self._ctx_manager = self._dg_client.listen.v1.connect(
             model="nova-2",
             language="hi",
             smart_format=True,
-            punctuate=True,
             diarize=True,
-            utterance_end_ms="1000",
-            vad_events=True,
-            interim_results=True,
+            interim_results=False,
             encoding="linear16",
             sample_rate=self.sample_rate,
             channels=1,
         )
 
-        # Enter the context manager to get the actual connection object
         self._connection = await self._ctx_manager.__aenter__()
 
-        # Register event handlers on the real connection object
         self._connection.on(EventType.MESSAGE, self._on_message)
         self._connection.on(EventType.ERROR, self._on_error)
         self._connection.on(EventType.CLOSE, self._on_close)
 
-        # Start listening in background task — keeps connection alive
         self._listen_task = asyncio.create_task(self._connection.start_listening())
 
-        self.client = self  # signals websocket.py that we're ready
+        self.client = self
         print("Connected to Deepgram STT (nova-2, diarize, hi/en)")
 
     def _on_message(self, result):
@@ -82,12 +74,11 @@ class DeepgramSTTService:
                 self._event_queue.put(
                     {
                         "type": "connection_closed",
-                        "text": "Connection to transcription service closed.",
+                        "text": "Transcription service disconnected.",
                     }
                 )
             )
         )
-        # Also put None to stop the events() generator
         asyncio.get_event_loop().call_soon_threadsafe(
             lambda: asyncio.ensure_future(self._event_queue.put(None))
         )
@@ -102,12 +93,11 @@ class DeepgramSTTService:
             if not text or not result.is_final:
                 return
 
-            segment_id = str(result.start)
+            segment_id = f"{result.start}_{result.speech_final}"
             if segment_id in self._seen_segments:
                 return
             self._seen_segments.add(segment_id)
 
-            # Extract speaker from diarization if available
             speaker_id = 0
             if alt.words:
                 speaker_id = getattr(alt.words[0], "speaker", 0) or 0
@@ -134,10 +124,6 @@ class DeepgramSTTService:
         await self._connection.send_media(pcm_frame)
 
     async def events(self):
-        """
-        Async generator — yields transcript dicts until stream closes.
-        Called by forward_transcripts() in websocket.py.
-        """
         while True:
             item = await self._event_queue.get()
             if item is None:
