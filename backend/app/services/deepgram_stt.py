@@ -93,7 +93,10 @@ class DeepgramSTTService:
             if not text or not result.is_final:
                 return
 
-            segment_id = f"{result.start}_{result.speech_final}"
+            # ✅ Fix: use only result.start as float, converted to string
+            # Never combine with other fields — keeps it a valid float string
+            segment_id = f"{float(result.start):.3f}"
+
             if segment_id in self._seen_segments:
                 return
             self._seen_segments.add(segment_id)

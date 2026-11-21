@@ -1,25 +1,28 @@
 import { create } from "zustand"
 
-export type Segment = { id: string; text: string; at: number }
+export type Segment = { id: string; text: string; at: number; speaker?: number }
 export type Status = "idle" | "starting" | "recording" | "stopping" | "error"
 
 export type MeetingState = {
     status: Status
     segments: Segment[]
+    meetingId: string | null        // ✅ track current meeting DB id
     setStatus: (status: Status) => void
     addSegment: (segment: Segment) => void
+    setMeetingId: (id: string | null) => void
     reset: () => void
 }
 
 export const useMeetingStore = create<MeetingState>((set) => ({
     status: "idle",
     segments: [],
+    meetingId: null,
     setStatus: (status) => set({ status }),
     addSegment: (segment) => set((s) => ({ segments: [...s.segments, segment] })),
-    reset: () => set({ segments: [] }),
+    setMeetingId: (id) => set({ meetingId: id }),
+    reset: () => set({ segments: [], meetingId: null }),
 }))
 
-// Small helpers over chrome.storage.local, replacing @plasmohq/storage.
 export const extStorage = {
     get: async <T = unknown>(key: string): Promise<T | undefined> =>
         (await chrome.storage.local.get(key))[key] as T | undefined,

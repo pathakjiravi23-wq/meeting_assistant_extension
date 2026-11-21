@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from "react"
+import { useEffect, useState, useRef, useCallback } from "react"
 import { useMeetingStore, extStorage } from "@/store/meetingStore"
 import { Sidebar, type Nav } from "@/components/sidebar/Sidebar"
 import { Header } from "@/components/layout/Header"
@@ -17,36 +17,47 @@ export default function SidePanel() {
     const [showNewPage, setShowNewPage] = useState(false)
     const [savedTitle, setSavedTitle] = useState<string | null>(null)
     const [sidebarOpen, setSidebarOpen] = useState(true)
-    const [transcriptError, setTranscriptError] = useState<string | null>(null) // ← new
+    const [transcriptError, setTranscriptError] = useState<string | null>(null)
 
     const prevStatus = useRef<string | null>(null)
 
-    useEffect(() => {
-        extStorage.get<string>("status").then((s) => s && setStatus(s as any))
-        const unwatch = extStorage.watch({ status: (c) => setStatus(c.newValue as any) })
-        return () => unwatch()
-    }, [])
+    // ✅ Re-read all storage on focus — fixes popup↔sidebar desync
+    const syncFromStorage = useCallback(async () => {
+        const s = await extStorage.get<string>("status")
+        if (s) setStatus(s as any)
+        const e = await extStorage.get<string>("transcriptError")
+        setTranscriptError(e ?? null)
+    }, [setStatus])
 
-    // ← new: watch transcriptError from storage
     useEffect(() => {
-        extStorage.get<string>("transcriptError").then((e) => setTranscriptError(e ?? null))
+        // Initial read
+        syncFromStorage()
+
+        // ✅ Re-sync when sidebar gets focus (user switches to it)
+        window.addEventListener("focus", syncFromStorage)
+        return () => window.removeEventListener("focus", syncFromStorage)
+    }, [syncFromStorage])
+
+    useEffect(() => {
         const unwatch = extStorage.watch({
+            status: (c) => setStatus(c.newValue as any),
             transcriptError: (c) => setTranscriptError(c.newValue ?? null),
         })
         return () => unwatch()
-    }, [])
+    }, [setStatus])
 
     useEffect(() => {
         if (status === "recording" && prevStatus.current !== "recording") {
             useMeetingStore.getState().reset()
             setSavedTitle(null)
             setShowNewPage(false)
-            setTranscriptError(null) // ← clear error on new recording
+            setTranscriptError(null)
             chrome.storage.local.remove("transcriptError")
         }
         prevStatus.current = status
     }, [status])
 
+    // ✅ Transcript sync with speaker support
     useEffect(() => {
         const sync = (list: any[] = []) => {
             const store = useMeetingStore.getState()
@@ -58,6 +69,7 @@ export default function SidePanel() {
                         id: item.segment_id ?? crypto.randomUUID(),
                         text: item.text,
                         at: Date.now(),
+                        speaker: item.speaker ?? 0,
                     })
                 }
             }
@@ -111,7 +123,7 @@ export default function SidePanel() {
                 segments={segments}
                 saving={isSaving}
                 onStop={onStop}
-                transcriptError={transcriptError} // ← pass down
+                transcriptError={transcriptError}
             />
         )
         if (isSaved && savedTitle) return <SavedView title={savedTitle} onTitleChange={setSavedTitle} onNew={openNew} />

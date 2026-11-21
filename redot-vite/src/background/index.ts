@@ -10,11 +10,18 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         appendTranscript(message.payload)
         return false
     }
-    // ← new: store transcript errors
+
     if (message.target === "background" && message.action === "TRANSCRIPT_ERROR") {
         set("transcriptError", message.payload.message)
         return false
     }
+
+    // ✅ Backend disconnected unexpectedly — auto stop recording + notify frontend
+    if (message.target === "background" && message.action === "BACKEND_DISCONNECTED") {
+        handleBackendDisconnect()
+        return false
+    }
+
     if (message.target === "offscreen") return false
 
     if (message.action === "START") {
@@ -27,6 +34,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     }
     return false
 })
+
+async function handleBackendDisconnect() {
+    console.warn("Backend disconnected unexpectedly — stopping recording")
+    await set("transcriptError", "Backend disconnected. Recording stopped automatically.")
+    await set("status", "idle")
+    try {
+        await chrome.runtime.sendMessage({ target: "offscreen", action: "STOP_RECORDING" })
+    } catch { }
+    await chrome.offscreen.closeDocument().catch(() => { })
+}
 
 async function findMeetingTab() {
     const windows = await chrome.windows.getAll({ populate: true, windowTypes: ["normal"] })
@@ -46,7 +63,7 @@ async function startRecording() {
         return { ok: true }
     }
     await chrome.storage.local.remove("error")
-    await chrome.storage.local.remove("transcriptError") // ← clear old errors on new recording
+    await chrome.storage.local.remove("transcriptError")
     await set("status", "starting")
     await chrome.storage.local.remove("transcripts")
     try {

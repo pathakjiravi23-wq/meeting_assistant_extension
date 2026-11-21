@@ -27,21 +27,39 @@ async function startCapture(streamId: string) {
         video: false,
     } as MediaStreamConstraints)
 
-    // Keep the meeting audible while it is captured.
     playback = new AudioContext()
     playback.createMediaStreamSource(stream).connect(playback.destination)
 
     socket = new WebSocket(BACKEND_WS)
     socket.binaryType = "arraybuffer"
+
     socket.onmessage = (event) => {
         const data = JSON.parse(event.data)
         if (data.type === "transcript" || data.type === "final") {
             chrome.runtime.sendMessage({ target: "background", action: "TRANSCRIPT", payload: data })
         }
-        // ← new: propagate error to frontend
         if (data.type === "error") {
             chrome.runtime.sendMessage({ target: "background", action: "TRANSCRIPT_ERROR", payload: data })
         }
+    }
+
+    // ✅ Backend WebSocket closed unexpectedly — auto stop recording
+    socket.onclose = (event) => {
+        // Only propagate if it was not a clean close (code 1000 = normal)
+        if (event.code !== 1000) {
+            chrome.runtime.sendMessage({
+                target: "background",
+                action: "BACKEND_DISCONNECTED",
+            })
+        }
+    }
+
+    socket.onerror = () => {
+        chrome.runtime.sendMessage({
+            target: "background",
+            action: "TRANSCRIPT_ERROR",
+            payload: { message: "Backend connection error. Is run_server.py running?" },
+        })
     }
 
     try {
